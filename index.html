@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>背景コンポーザー</title>
+<style>
+  :root {
+    --bg: #1a1b1e;
+    --panel: #232428;
+    --panel2: #2b2c31;
+    --line: #3a3b41;
+    --text: #e6e6e8;
+    --muted: #9a9ba1;
+    --accent: #6ea8fe;
+    --accent-dim: #35507d;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    overflow: hidden;
+  }
+  #app { display: grid; grid-template-columns: 240px 1fr 280px; grid-template-rows: 44px 1fr 52px; height: 100%; }
+
+  header {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 12px;
+    padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  header .status { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+  aside { background: var(--panel); overflow-y: auto; }
+  #left { border-right: 1px solid var(--line); }
+  #right { border-left: 1px solid var(--line); }
+
+  #viewport { position: relative; background: #101114; overflow: hidden; }
+  #viewport canvas { display: block; width: 100%; height: 100%; }
+  #dropHint {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(110,168,254,.12); border: 2px dashed var(--accent);
+    font-size: 15px; pointer-events: none;
+  }
+  #viewport.dragover #dropHint { display: flex; }
+  #hint {
+    position: absolute; left: 10px; bottom: 10px; color: var(--muted); font-size: 11px;
+    background: rgba(0,0,0,.45); padding: 4px 8px; border-radius: 4px; pointer-events: none;
+  }
+
+  footer {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line);
+  }
+
+  .sec { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .sec h2 { font-size: 11px; color: var(--muted); margin: 0 0 8px; font-weight: 600; letter-spacing: .06em; }
+
+  button {
+    font: inherit; color: var(--text); background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 5px; padding: 5px 9px; cursor: pointer;
+  }
+  button:hover { background: #34353b; }
+  button.primary { background: var(--accent-dim); border-color: var(--accent); }
+  button.primary:hover { background: #3f5f92; }
+  button.sm { padding: 3px 7px; font-size: 11px; }
+  .btnrow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btnrow button { flex: 1 1 auto; }
+
+  input[type=text], input[type=number], select {
+    font: inherit; color: var(--text); background: #1c1d21;
+    border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; width: 100%;
+  }
+  input[type=number] { -moz-appearance: textfield; }
+  input[type=color] { width: 32px; height: 22px; padding: 0; border: 1px solid var(--line); background: none; border-radius: 4px; cursor: pointer; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); }
+  label { color: var(--muted); }
+
+  .row { display: grid; grid-template-columns: 74px 1fr; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .row .val { display: flex; align-items: center; gap: 6px; }
+  .row .val .num { width: 52px; flex: none; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .triple { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+
+  ul#layers { list-style: none; margin: 0; padding: 0; }
+  ul#layers li {
+    display: flex; align-items: center; gap: 6px; padding: 5px 12px;
+    border-bottom: 1px solid #2a2b30; cursor: pointer;
+  }
+  ul#layers li:hover { background: var(--panel2); }
+  ul#layers li.sel { background: var(--accent-dim); }
+  ul#layers li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ul#layers li .ic { width: 16px; text-align: center; opacity: .8; }
+  ul#layers li .eye { opacity: .55; }
+  ul#layers li.hidden .nm { opacity: .4; text-decoration: line-through; }
+
+  .empty { color: var(--muted); padding: 10px 12px; font-size: 12px; }
+  .divider { height: 1px; background: var(--line); margin: 10px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>背景コンポーザー</h1>
+    <button class="sm" id="btnFrame">全体を表示</button>
+    <button class="sm" id="btnResetCam">カメラ初期化</button>
+    <span class="status" id="status">準備完了</span>
+  </header>
+
+  <aside id="left">
+    <div class="sec">
+      <h2>追加</h2>
+      <div class="btnrow">
+        <button id="btnAddModel">3Dモデル</button>
+        <button id="btnAddImage">画像</button>
+      </div>
+      <div class="btnrow" style="margin-top:6px">
+        <button id="btnAddDir" class="sm">平行光源</button>
+        <button id="btnAddPoint" class="sm">点光源</button>
+        <button id="btnAddSpot" class="sm">スポット</button>
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:11px">
+        <input type="checkbox" id="autoFit" checked> モデルのサイズを自動調整
+      </label>
+    </div>
+    <div class="sec" style="border:none">
+      <h2>レイヤー</h2>
+      <ul id="layers"></ul>
+      <div class="empty" id="layersEmpty">まだレイヤーがありません。<br>ファイルをドラッグ＆ドロップでも追加できます。</div>
+    </div>
+  </aside>
+
+  <div id="viewport">
+    <div id="dropHint">ドロップして読み込み（.glb / .gltf / 画像 / .hdr）</div>
+    <div id="hint">左ドラッグ=回転 / 右ドラッグ=移動 / ホイール=ズーム ｜ W=移動 E=回転 R=拡縮 Q=ギズモ切替 Delete=削除</div>
+  </div>
+
+  <aside id="right">
+    <div class="sec">
+      <h2>選択中のレイヤー</h2>
+      <div id="props"><div class="empty" style="padding:0">レイヤーを選択してください</div></div>
+    </div>
+
+    <div class="sec">
+      <h2>環境・全体</h2>
+      <div class="row"><label>環境光</label><div class="val">
+        <input type="range" id="envInt" min="0" max="3" step="0.01" value="1"><span class="num" id="envIntV">1.00</span>
+      </div></div>
+      <div class="row"><label>環境マップ</label><div class="val">
+        <select id="envSelect"><option value="room">標準（スタジオ）</option><option value="none">なし</option><option value="file">読み込んだ画像</option></select>
+      </div></div>
+      <div class="btnrow"><button class="sm" id="btnEnvFile">環境マップを読み込み（.hdr / .jpg / .png）</button></div>
+      <div class="divider"></div>
+      <div class="row"><label>背景</label><div class="val">
+        <select id="bgMode"><option value="color">単色</option><option value="transparent">透明</option><option value="env">環境マップ</option></select>
+      </div></div>
+      <div class="row"><label>背景色</label><div class="val"><input type="color" id="bgColor" value="#12131a"></div></div>
+      <div class="row"><label>背景ぼかし</label><div class="val">
+        <input type="range" id="bgBlur" min="0" max="1" step="0.01" value="0"><span class="num" id="bgBlurV">0.00</span>
+      </div></div>
+      <div class="divider"></div>
+      <div class="row"><label>露出</label><div class="val">
+        <input type="range" id="exposure" min="0" max="3" step="0.01" value="1"><span class="num" id="exposureV">1.00</span>
+      </div></div>
+      <div class="row"><label>トーン</label><div class="val">
+        <select id="toneMap">
+          <option value="aces">ACES Filmic（映画的）</option>
+          <option value="neutral">Neutral</option>
+          <option value="linear">Linear（無加工）</option>
+        </select>
+      </div></div>
+      <div class="divider"></div>
+      <div class="row"><label>影を受ける床</label><div class="val"><input type="checkbox" id="shadowCatcher" checked></div></div>
+      <div class="row"><label>床の濃さ</label><div class="val">
+        <input type="range" id="shadowOpacity" min="0" max="1" step="0.01" value="0.35"><span class="num" id="shadowOpacityV">0.35</span>
+      </div></div>
+      <div class="row"><label>グリッド表示</label><div class="val"><input type="checkbox" id="showGrid" checked></div></div>
+    </div>
+
+    <div class="sec" style="border:none">
+      <h2>カメラ</h2>
+      <div class="row"><label>画角(FOV)</label><div class="val">
+        <input type="range" id="fov" min="10" max="110" step="1" value="45"><span class="num" id="fovV">45</span>
+      </div></div>
+    </div>
+  </aside>
+
+  <footer>
+    <label>出力サイズ</label>
+    <input type="number" id="outW" value="1920" min="16" max="8192" style="width:78px">
+    <span style="color:var(--muted)">×</span>
+    <input type="number" id="outH" value="1080" min="16" max="8192" style="width:78px">
+    <select id="preset" style="width:150px">
+      <option value="">プリセット…</option>
+      <option value="1920x1080">フルHD 1920×1080</option>
+      <option value="3840x2160">4K 3840×2160</option>
+      <option value="2048x2048">正方形 2048</option>
+      <option value="1080x1920">縦 1080×1920</option>
+      <option value="2894x4093">B5相当 350dpi 縦</option>
+    </select>
+    <label>高画質</label>
+    <select id="ssaa" style="width:70px"><option value="1">1x</option><option value="2" selected>2x</option><option value="3">3x</option></select>
+    <label>JPEG画質</label>
+    <input type="range" id="jpegQ" min="0.5" max="1" step="0.01" value="0.92" style="width:90px">
+    <span style="margin-left:auto"></span>
+    <button class="primary" id="btnPng">PNGで書き出し</button>
+    <button class="primary" id="btnJpg">JPEGで書き出し</button>
+  </footer>
+</div>
+
+<input type="file" id="fileModel" accept=".glb,.gltf,.bin,image/*" multiple hidden>
+<input type="file" id="fileImage" accept="image/*" multiple hidden>
+<input type="file" id="fileEnv" accept=".hdr,image/*" hidden>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const THREE_CDN = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/';
+const $ = (id) => document.getElementById(id);
+const viewport = $('viewport');
+const statusEl = $('status');
+const setStatus = (t) => { statusEl.textContent = t; };
+
+/* ------------------------------------------------------------------ *
+ * レンダラー・シーン
+ * ------------------------------------------------------------------ */
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  alpha: true,                 // 背景「透明」でのPNG書き出し用
+  preserveDrawingBuffer: true, // 書き出し時にピクセルを読み取るため
+});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+viewport.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();            // 3D本体
+const bgScene = new THREE.Scene();          // 画面固定の背景レイヤー
+const fgScene = new THREE.Scene();          // 画面固定の前景レイヤー
+const overlayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 10);
+overlayCam.position.z = 2;
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
+const CAM_HOME = { pos: new THREE.Vector3(3.2, 2.0, 5.0), target: new THREE.Vector3(0, 0.9, 0) };
+camera.position.copy(CAM_HOME.pos);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.copy(CAM_HOME.target);
+
+const tControls = new TransformControls(camera, renderer.domElement);
+tControls.addEventListener('dragging-changed', (e) => { controls.enabled = !e.value; });
+// r169以降 TransformControls は Object3D ではなくなり getHelper() を使う
+const tHelper = tControls.getHelper ? tControls.getHelper() : tControls;
+scene.add(tHelper);
+tHelper.visible = false;
+
+// 補助表示（書き出し時は隠す）
+const grid = new THREE.GridHelper(20, 20, 0x555a66, 0x33363d);
+grid.material.transparent = true;
+grid.material.opacity = 0.5;
+scene.add(grid);
+
+// 影を受ける床
+const shadowCatcher = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.ShadowMaterial({ opacity: 0.35 })
+);
+shadowCatcher.rotation.x = -Math.PI / 2;
+shadowCatcher.receiveShadow = true;
+scene.add(shadowCatcher);
+
+// 既定の環境マップ（IBL）
+const pmrem = new THREE.PMREMGenerator(renderer);
+pmrem.compileEquirectangularShader();
+const roomEnv = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+let fileEnvTex = null;
+scene.environment = roomEnv;
+scene.environmentIntensity = 1;
+
+/* ------------------------------------------------------------------ *
+ * ローダー
+ * ------------------------------------------------------------------ */
+function makeGLTFLoader(manager) {
+  const loader = new GLTFLoader(manager);
+  const draco = new DRACOLoader().setDecoderPath(THREE_CDN + 'draco/');
+  loader.setDRACOLoader(draco);
+  const ktx2 = new KTX2Loader(manager).setTranscoderPath(THREE_CDN + 'basis/').detectSupport(renderer);
+  loader.setKTX2Loader(ktx2);
+  loader.setMeshoptDecoder(MeshoptDecoder);
+  return loader;
+}
+
+/* ------------------------------------------------------------------ *
+ * レイヤー管理
+ * ------------------------------------------------------------------ */
+let layers = [];
+let selectedId = null;
+let uid = 1;
+
+const ICON = { model: '◈', image: '▣', light: '☀' };
+
+function addLayer(layer) {
+  layer.id = uid++;
+  layer.visible = true;
+  layers.unshift(layer); // 新しいものを上に（AE風）
+  selectedId = layer.id;
+  syncOverlayOrder();
+  renderLayerList();
+  renderProps();
+  return layer;
+}
+
+function getLayer(id) { return layers.find((l) => l.id === id); }
+function selected() { return getLayer(selectedId); }
+
+function removeLayer(id) {
+  const i = layers.findIndex((l) => l.id === id);
+  if (i < 0) return;
+  const l = layers[i];
+  if (tControls.object && isDescendant(tControls.object, l.obj)) tControls.detach();
+  l.obj.parent?.remove(l.obj);
+  l.helper?.parent?.remove(l.helper);
+  if (l.light?.target) l.light.target.parent?.remove(l.light.target);
+  disposeTree(l.obj);
+  layers.splice(i, 1);
+  if (selectedId === id) selectedId = layers[0]?.id ?? null;
+  syncOverlayOrder();
+  renderLayerList();
+  renderProps();
+}
+
+function isDescendant(node, root) {
+  let n = node;
+  while (n) { if (n === root) return true; n = n.parent; }
+  return false;
+}
+
+function disposeTree(root) {
+  root.traverse?.((o) => {
+    o.geometry?.dispose?.();
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) {
+      for (const k of Object.keys(m)) if (m[k]?.isTexture) m[k].dispose();
+      m.dispose?.();
+    }
+  });
+}
+
+/* --- 3Dモデル -------------------------------------------------------- */
+async function addModelFiles(fileList) {
+  const files = Array.from(fileList);
+  const entry = files.find((f) => /\.(glb|gltf)$/i.test(f.name));
+  if (!entry) { setStatus('.glb / .gltf ファイルが見つかりません'); return; }
+
+  // .gltf + .bin + テクスチャ を同時選択した場合に相対パスを解決する
+  const urlMap = new Map();
+  for (const f of files) urlMap.set(f.name, URL.createObjectURL(f));
+
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => {
+    const base = decodeURIComponent(url.split('/').pop().split('?')[0]);
+    return urlMap.get(base) ?? url;
+  });
+
+  setStatus(`読み込み中: ${entry.name}…`);
+  try {
+    const loader = makeGLTFLoader(manager);
+    const gltf = await loader.loadAsync(urlMap.get(entry.name));
+    const root = gltf.scene;
+
+    root.traverse((o) => {
+      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+    });
+
+    // 原点合わせ（接地）と任意のサイズ正規化
+    const wrap = new THREE.Group();
+    wrap.name = entry.name;
+    const box = new THREE.Box3().setFromObject(root);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    let s = 1;
+    if ($('autoFit').checked) {
+      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+      s = 2 / maxDim;
+    }
+    root.position.set(-center.x, -box.min.y, -center.z);
+    root.scale.setScalar(1);
+    wrap.add(root);
+    wrap.scale.setScalar(s);
+    scene.add(wrap);
+
+    addLayer({ kind: 'model', name: entry.name, obj: wrap });
+    setStatus(`読み込み完了: ${entry.name}`);
+    frameAll();
+  } catch (err) {
+    console.error(err);
+    setStatus('読み込み失敗: ' + err.message);
+  }
+}
+
+/* --- 画像 ------------------------------------------------------------ */
+async function addImageFile(file, mode = 'bg') {
+  const url = URL.createObjectURL(file);
+  const tex = await new THREE.TextureLoader().loadAsync(url);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
+  const layer = {
+    kind: 'image', name: file.name, obj: mesh, tex,
+    mode,                              // bg | plane | fg
+    fit: 'cover',                      // 画面固定時のフィット方法
+    imgAspect: tex.image.width / tex.image.height,
+    opacity: 1, unlit: true,
+    offX: 0, offY: 0, sc: 1, rot: 0,   // 画面固定時の調整
+  };
+  applyImageMode(layer);
+  addLayer(layer);
+  setStatus(`画像を追加: ${file.name}`);
+}
+
+function applyImageMode(l) {
+  l.obj.parent?.remove(l.obj);
+  l.obj.material?.dispose();
+
+  if (l.mode === 'plane') {
+    const Mat = l.unlit ? THREE.MeshBasicMaterial : THREE.MeshStandardMaterial;
+    l.obj.material = new Mat({
+      map: l.tex, transparent: true, opacity: l.opacity,
+      side: THREE.DoubleSide, alphaTest: 0.001,
+      ...(l.unlit ? {} : { roughness: 1, metalness: 0 }),
+    });
+    l.obj.castShadow = !l.unlit;
+    l.obj.receiveShadow = !l.unlit;
+    l.obj.renderOrder = 0;
+    if (!l.placed) {
+      // 初回だけ、画像の縦横比を保った板として立てる
+      l.obj.scale.set(2 * l.imgAspect, 2, 1);
+      l.obj.position.set(0, 1, 0);
+      l.placed = true;
+    }
+    scene.add(l.obj);
+  } else {
+    l.obj.material = new THREE.MeshBasicMaterial({
+      map: l.tex, transparent: true, opacity: l.opacity,
+      depthTest: false, depthWrite: false, toneMapped: false,
+    });
+    l.obj.castShadow = false;
+    l.obj.receiveShadow = false;
+    (l.mode === 'bg' ? bgScene : fgScene).add(l.obj);
+  }
+  syncOverlayOrder();
+}
+
+// 画面固定レイヤーを出力アスペクトに合わせる
+function layoutScreenLayers(W, H) {
+  overlayCam.left = -1; overlayCam.right = 1; overlayCam.top = 1; overlayCam.bottom = -1;
+  overlayCam.updateProjectionMatrix();
+
+  for (const l of layers) {
+    if (l.kind !== 'image' || l.mode === 'plane') continue;
+    let wpx, hpx;
+    if (l.fit === 'stretch') {
+      wpx = W; hpx = H;
+    } else {
+      const byWidth = l.fit === 'contain' ? (W <= H * l.imgAspect) : (W >= H * l.imgAspect);
+      wpx = byWidth ? W : H * l.imgAspect;
+      hpx = wpx / l.imgAspect;
+    }
+    l.obj.scale.set((2 * wpx / W) * l.sc, (2 * hpx / H) * l.sc, 1);
+    l.obj.position.set(l.offX * 2, l.offY * 2, 0);
+    l.obj.rotation.z = l.rot * Math.PI / 180;
+  }
+}
+
+// 画面固定レイヤーの重ね順（リスト上が手前）
+function syncOverlayOrder() {
+  const n = layers.length;
+  layers.forEach((l, i) => {
+    if (l.kind === 'image' && l.mode !== 'plane') l.obj.renderOrder = n - i;
+  });
+}
+
+/* --- ライト ---------------------------------------------------------- */
+function addLight(type) {
+  let light, helper;
+  if (type === 'directional') {
+    light = new THREE.DirectionalLight(0xffffff, 2.5);
+    light.position.set(4, 6, 4);
+    light.target.position.set(0, 0, 0);
+    scene.add(light.target);
+    const c = light.shadow.camera;
+    c.left = -8; c.right = 8; c.top = 8; c.bottom = -8; c.near = 0.1; c.far = 50;
+    light.shadow.mapSize.set(2048, 2048);
+    light.shadow.bias = -0.0008;
+    light.shadow.normalBias = 0.02;
+    helper = new THREE.DirectionalLightHelper(light, 0.6, 0xffd479);
+  } else if (type === 'point') {
+    light = new THREE.PointLight(0xffffff, 12, 0, 2);
+    light.position.set(2, 2.5, 2);
+    light.shadow.mapSize.set(1024, 1024);
+    light.shadow.bias = -0.002;
+    helper = new THREE.PointLightHelper(light, 0.2, 0xffd479);
+  } else {
+    light = new THREE.SpotLight(0xffffff, 30, 0, Math.PI / 6, 0.35, 2);
+    light.position.set(3, 5, 3);
+    light.target.position.set(0, 0, 0);
+    scene.add(light.target);
+    light.shadow.mapSize.set(1024, 1024);
+    light.shadow.bias = -0.002;
+    helper = new THREE.SpotLightHelper(light, 0xffd479);
+  }
+  light.castShadow = true;
+  scene.add(light);
+  scene.add(helper);
+
+  const names = { directional: '平行光源', point: '点光源', spot: 'スポットライト' };
+  addLayer({ kind: 'light', lightType: type, name: names[type], obj: light, light, helper });
+  setStatus(`${names[type]}を追加`);
+}
+
+/* ------------------------------------------------------------------ *
+ * レイヤーリスト UI
+ * ------------------------------------------------------------------ */
+function renderLayerList() {
+  const ul = $('layers');
+  ul.innerHTML = '';
+  $('layersEmpty').style.display = layers.length ? 'none' : '';
+
+  layers.forEach((l, i) => {
+    const li = document.createElement('li');
+    li.className = (l.id === selectedId ? 'sel ' : '') + (l.visible ? '' : 'hidden');
+    li.innerHTML = `<span class="ic">${ICON[l.kind]}</span><span class="nm"></span>
+      <span class="eye" title="表示/非表示">${l.visible ? '●' : '○'}</span>
+      <span class="mv" title="上へ">↑</span><span class="mv2" title="下へ">↓</span>`;
+    li.querySelector('.nm').textContent = l.name;
+
+    li.onclick = () => { selectedId = l.id; renderLayerList(); renderProps(); attachGizmo(); };
+    li.querySelector('.eye').onclick = (e) => {
+      e.stopPropagation();
+      l.visible = !l.visible;
+      l.obj.visible = l.visible;
+      if (l.helper) l.helper.visible = l.visible;
+      if (l.light?.target) l.light.target.visible = l.visible;
+      renderLayerList();
+    };
+    li.querySelector('.mv').onclick = (e) => { e.stopPropagation(); move(i, -1); };
+    li.querySelector('.mv2').onclick = (e) => { e.stopPropagation(); move(i, 1); };
+    ul.appendChild(li);
+  });
+}
+
+function move(i, d) {
+  const j = i + d;
+  if (j < 0 || j >= layers.length) return;
+  [layers[i], layers[j]] = [layers[j], layers[i]];
+  syncOverlayOrder();
+  renderLayerList();
+}
+
+/* ------------------------------------------------------------------ *
+ * プロパティパネル
+ * ------------------------------------------------------------------ */
+function row(label, node) {
+  const d = document.createElement('div');
+  d.className = 'row';
+  const lb = document.createElement('label');
+  lb.textContent = label;
+  const val = document.createElement('div');
+  val.className = 'val';
+  val.appendChild(node);
+  d.append(lb, val);
+  return d;
+}
+
+function slider(min, max, step, value, oninput, fmt = (v) => v.toFixed(2)) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;align-items:center;gap:6px;flex:1';
+  const s = document.createElement('input');
+  s.type = 'range'; s.min = min; s.max = max; s.step = step; s.value = value;
+  const n = document.createElement('span');
+  n.className = 'num'; n.textContent = fmt(+value);
+  s.oninput = () => { n.textContent = fmt(+s.value); oninput(+s.value); };
+  wrap.append(s, n);
+  return wrap;
+}
+
+function vec3Row(label, obj, key, step, onchange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'triple';
+  ['x', 'y', 'z'].forEach((ax) => {
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.step = step;
+    inp.value = obj[key][ax].toFixed(3);
+    inp.dataset.ax = ax;
+    inp.onchange = () => { obj[key][ax] = +inp.value; onchange?.(); };
+    wrap.appendChild(inp);
+  });
+  wrap._refresh = () => {
+    wrap.querySelectorAll('input').forEach((inp) => {
+      if (document.activeElement !== inp) inp.value = obj[key][inp.dataset.ax].toFixed(3);
+    });
+  };
+  return row(label, wrap);
+}
+
+let propRefreshers = [];
+
+function renderProps() {
+  const box = $('props');
+  box.innerHTML = '';
+  propRefreshers = [];
+  const l = selected();
+  if (!l) {
+    box.innerHTML = '<div class="empty" style="padding:0">レイヤーを選択してください</div>';
+    tControls.detach(); tHelper.visible = false;
+    return;
+  }
+
+  const nameInp = document.createElement('input');
+  nameInp.type = 'text'; nameInp.value = l.name;
+  nameInp.onchange = () => { l.name = nameInp.value; renderLayerList(); };
+  box.appendChild(row('名前', nameInp));
+
+  if (l.kind === 'model' || (l.kind === 'image' && l.mode === 'plane')) {
+    const rPos = vec3Row('位置', l.obj, 'position', 0.01);
+    const rRot = document.createElement('div');
+    // 回転は度で編集
+    const rotWrap = document.createElement('div');
+    rotWrap.className = 'triple';
+    ['x', 'y', 'z'].forEach((ax) => {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = 1;
+      inp.value = (l.obj.rotation[ax] * 180 / Math.PI).toFixed(1);
+      inp.dataset.ax = ax;
+      inp.onchange = () => { l.obj.rotation[ax] = +inp.value * Math.PI / 180; };
+      rotWrap.appendChild(inp);
+    });
+    rotWrap._refresh = () => rotWrap.querySelectorAll('input').forEach((inp) => {
+      if (document.activeElement !== inp) inp.value = (l.obj.rotation[inp.dataset.ax] * 180 / Math.PI).toFixed(1);
+    });
+    rRot.appendChild(row('回転(度)', rotWrap));
+    const rScl = vec3Row('スケール', l.obj, 'scale', 0.01);
+
+    box.append(rPos, rRot, rScl);
+    propRefreshers.push(rPos.querySelector('.triple')._refresh, rotWrap._refresh, rScl.querySelector('.triple')._refresh);
+
+    const unif = document.createElement('button');
+    unif.className = 'sm';
+    unif.textContent = 'スケールを揃える(X基準)';
+    unif.onclick = () => { l.obj.scale.setScalar(l.obj.scale.x); refreshProps(); };
+    box.appendChild(row('', unif));
+  }
+
+  if (l.kind === 'image') {
+    const modeSel = document.createElement('select');
+    modeSel.innerHTML = `<option value="bg">背景（画面固定・最背面）</option>
+      <option value="plane">3D空間の板（ライティングあり）</option>
+      <option value="fg">前景（画面固定・最前面）</option>`;
+    modeSel.value = l.mode;
+    modeSel.onchange = () => { l.mode = modeSel.value; applyImageMode(l); renderProps(); };
+    box.appendChild(row('配置', modeSel));
+
+    if (l.mode !== 'plane') {
+      const fitSel = document.createElement('select');
+      fitSel.innerHTML = `<option value="cover">全面を覆う</option>
+        <option value="contain">全体を収める</option><option value="stretch">引き伸ばす</option>`;
+      fitSel.value = l.fit;
+      fitSel.onchange = () => { l.fit = fitSel.value; };
+      box.appendChild(row('フィット', fitSel));
+      box.appendChild(row('横位置', slider(-1, 1, 0.001, l.offX, (v) => l.offX = v)));
+      box.appendChild(row('縦位置', slider(-1, 1, 0.001, l.offY, (v) => l.offY = v)));
+      box.appendChild(row('拡大', slider(0.1, 4, 0.01, l.sc, (v) => l.sc = v)));
+      box.appendChild(row('回転(度)', slider(-180, 180, 0.5, l.rot, (v) => l.rot = v, (v) => v.toFixed(1))));
+    } else {
+      const unlit = document.createElement('input');
+      unlit.type = 'checkbox'; unlit.checked = l.unlit;
+      unlit.onchange = () => { l.unlit = unlit.checked; l.placed = true; applyImageMode(l); };
+      box.appendChild(row('光の影響なし', unlit));
+    }
+
+    box.appendChild(row('不透明度', slider(0, 1, 0.01, l.opacity, (v) => {
+      l.opacity = v; l.obj.material.opacity = v;
+    })));
+  }
+
+  if (l.kind === 'light') {
+    const col = document.createElement('input');
+    col.type = 'color'; col.value = '#' + l.light.color.getHexString();
+    col.oninput = () => { l.light.color.set(col.value); l.helper?.update?.(); };
+    box.appendChild(row('色', col));
+
+    const maxI = l.lightType === 'directional' ? 10 : 100;
+    box.appendChild(row('強さ', slider(0, maxI, 0.01, l.light.intensity, (v) => {
+      l.light.intensity = v;
+    })));
+
+    const rPos = vec3Row('位置', l.light, 'position', 0.1, () => l.helper?.update?.());
+    box.append(rPos);
+    propRefreshers.push(rPos.querySelector('.triple')._refresh);
+
+    if (l.light.target) {
+      const rTgt = vec3Row('照射先', l.light.target, 'position', 0.1, () => {
+        l.light.target.updateMatrixWorld(); l.helper?.update?.();
+      });
+      box.append(rTgt);
+      propRefreshers.push(rTgt.querySelector('.triple')._refresh);
+    }
+
+    if (l.lightType === 'spot') {
+      box.appendChild(row('広がり', slider(1, 89, 0.5, l.light.angle * 180 / Math.PI, (v) => {
+        l.light.angle = v * Math.PI / 180; l.helper?.update?.();
+      }, (v) => v.toFixed(1))));
+      box.appendChild(row('ぼかし', slider(0, 1, 0.01, l.light.penumbra, (v) => l.light.penumbra = v)));
+    }
+    if (l.lightType !== 'directional') {
+      box.appendChild(row('減衰距離', slider(0, 50, 0.1, l.light.distance, (v) => l.light.distance = v, (v) => v.toFixed(1))));
+    }
+
+    const sh = document.createElement('input');
+    sh.type = 'checkbox'; sh.checked = l.light.castShadow;
+    sh.onchange = () => { l.light.castShadow = sh.checked; };
+    box.appendChild(row('影を落とす', sh));
+
+    const soft = document.createElement('input');
+    soft.type = 'checkbox'; soft.checked = l.light.shadow.radius > 1;
+    soft.onchange = () => { l.light.shadow.radius = soft.checked ? 4 : 1; };
+    box.appendChild(row('影をやわらかく', soft));
+  }
+
+  const del = document.createElement('button');
+  del.className = 'sm';
+  del.textContent = 'このレイヤーを削除';
+  del.onclick = () => removeLayer(l.id);
+  const dwrap = document.createElement('div');
+  dwrap.style.marginTop = '10px';
+  dwrap.appendChild(del);
+  box.appendChild(dwrap);
+
+  attachGizmo();
+}
+
+function refreshProps() { propRefreshers.forEach((f) => f?.()); }
+
+// 選択レイヤーにギズモを付ける（画面固定の画像は対象外）
+function attachGizmo() {
+  const l = selected();
+  const movable = l && (l.kind === 'model' || l.kind === 'light' || (l.kind === 'image' && l.mode === 'plane'));
+  if (movable) {
+    tControls.attach(l.kind === 'light' ? l.light : l.obj);
+    tHelper.visible = true;
+  } else {
+    tControls.detach();
+    tHelper.visible = false;
+  }
+}
+
+tControls.addEventListener('objectChange', () => {
+  const l = selected();
+  l?.helper?.update?.();
+  refreshProps();
+});
+
+/* ------------------------------------------------------------------ *
+ * 環境・全体設定
+ * ------------------------------------------------------------------ */
+// 背景は「下地の塗り → 環境マップ → 背景画像レイヤー → 3D本体」の順に重ねる。
+// scene.background を使うと3D描画時に背景画像レイヤーを塗り潰してしまうため、
+// 環境マップ背景だけは専用シーンに持たせて先に描く。
+const envBgScene = new THREE.Scene();
+let bgUseEnv = false;
+
+function applyBackground() {
+  const mode = $('bgMode').value;
+  scene.background = null;
+  bgUseEnv = mode === 'env';
+  if (mode === 'transparent') renderer.setClearColor(0x000000, 0);
+  else renderer.setClearColor(new THREE.Color($('bgColor').value), 1);
+  envBgScene.background = bgUseEnv ? scene.environment : null;
+  envBgScene.backgroundBlurriness = +$('bgBlur').value;
+}
+
+function applyEnvironment() {
+  const v = $('envSelect').value;
+  scene.environment = v === 'none' ? null : (v === 'file' ? (fileEnvTex ?? roomEnv) : roomEnv);
+  applyBackground();
+}
+
+$('envInt').oninput = (e) => { scene.environmentIntensity = +e.target.value; $('envIntV').textContent = (+e.target.value).toFixed(2); };
+$('envSelect').onchange = applyEnvironment;
+$('bgMode').onchange = applyBackground;
+$('bgColor').oninput = applyBackground;
+$('bgBlur').oninput = (e) => { $('bgBlurV').textContent = (+e.target.value).toFixed(2); applyBackground(); };
+$('exposure').oninput = (e) => { renderer.toneMappingExposure = +e.target.value; $('exposureV').textContent = (+e.target.value).toFixed(2); };
+$('toneMap').onchange = (e) => {
+  renderer.toneMapping = { aces: THREE.ACESFilmicToneMapping, neutral: THREE.NeutralToneMapping, linear: THREE.LinearToneMapping }[e.target.value];
+  scene.traverse((o) => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.needsUpdate = true); });
+};
+$('shadowCatcher').onchange = (e) => { shadowCatcher.visible = e.target.checked; };
+$('shadowOpacity').oninput = (e) => { shadowCatcher.material.opacity = +e.target.value; $('shadowOpacityV').textContent = (+e.target.value).toFixed(2); };
+$('showGrid').onchange = (e) => { grid.visible = e.target.checked; };
+$('fov').oninput = (e) => { camera.fov = +e.target.value; camera.updateProjectionMatrix(); $('fovV').textContent = e.target.value; };
+
+applyBackground();
+
+/* ------------------------------------------------------------------ *
+ * ファイル入力
+ * ------------------------------------------------------------------ */
+$('btnAddModel').onclick = () => $('fileModel').click();
+$('btnAddImage').onclick = () => $('fileImage').click();
+$('btnEnvFile').onclick = () => $('fileEnv').click();
+
+$('fileModel').onchange = (e) => { if (e.target.files.length) addModelFiles(e.target.files); e.target.value = ''; };
+$('fileImage').onchange = async (e) => {
+  for (const f of e.target.files) await addImageFile(f, 'bg');
+  e.target.value = '';
+};
+$('fileEnv').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (f) await loadEnvFile(f);
+  e.target.value = '';
+};
+
+async function loadEnvFile(file) {
+  setStatus('環境マップを読み込み中…');
+  try {
+    const url = URL.createObjectURL(file);
+    let tex;
+    if (/\.hdr$/i.test(file.name)) {
+      tex = await new RGBELoader().loadAsync(url);
+    } else {
+      tex = await new THREE.TextureLoader().loadAsync(url);
+      tex.colorSpace = THREE.SRGBColorSpace;
+    }
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    fileEnvTex?.dispose();
+    fileEnvTex = pmrem.fromEquirectangular(tex).texture;
+    tex.dispose();
+    $('envSelect').value = 'file';
+    applyEnvironment();
+    setStatus('環境マップを適用しました');
+  } catch (err) {
+    console.error(err);
+    setStatus('環境マップの読み込み失敗: ' + err.message);
+  }
+}
+
+$('btnAddDir').onclick = () => addLight('directional');
+$('btnAddPoint').onclick = () => addLight('point');
+$('btnAddSpot').onclick = () => addLight('spot');
+
+// ドラッグ＆ドロップ
+['dragenter', 'dragover'].forEach((ev) => viewport.addEventListener(ev, (e) => {
+  e.preventDefault(); viewport.classList.add('dragover');
+}));
+['dragleave', 'drop'].forEach((ev) => viewport.addEventListener(ev, (e) => {
+  e.preventDefault(); if (ev === 'drop' || e.target === viewport) viewport.classList.remove('dragover');
+}));
+viewport.addEventListener('drop', async (e) => {
+  const files = Array.from(e.dataTransfer.files);
+  const models = files.filter((f) => /\.(glb|gltf|bin)$/i.test(f.name));
+  const hdrs = files.filter((f) => /\.hdr$/i.test(f.name));
+  const imgs = files.filter((f) => f.type.startsWith('image/'));
+  if (models.length) await addModelFiles(files);
+  for (const f of hdrs) await loadEnvFile(f);
+  if (!models.length) for (const f of imgs) await addImageFile(f, 'bg');
+});
+
+/* ------------------------------------------------------------------ *
+ * カメラ操作
+ * ------------------------------------------------------------------ */
+function frameAll() {
+  const box = new THREE.Box3();
+  let has = false;
+  for (const l of layers) {
+    if (l.kind === 'model' || (l.kind === 'image' && l.mode === 'plane')) {
+      box.expandByObject(l.obj); has = true;
+    }
+  }
+  if (!has) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const dist = (maxDim / 2) / Math.tan((camera.fov * Math.PI / 180) / 2) * 1.8;
+  const dir = new THREE.Vector3(0.6, 0.35, 1).normalize();
+  camera.position.copy(center).addScaledVector(dir, dist);
+  controls.target.copy(center);
+  camera.near = Math.max(dist / 1000, 0.01);
+  camera.far = dist * 100;
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+$('btnFrame').onclick = frameAll;
+$('btnResetCam').onclick = () => {
+  camera.position.copy(CAM_HOME.pos);
+  controls.target.copy(CAM_HOME.target);
+  controls.update();
+};
+
+addEventListener('keydown', (e) => {
+  if (/input|select|textarea/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'w') tControls.setMode('translate');
+  else if (k === 'e') tControls.setMode('rotate');
+  else if (k === 'r') tControls.setMode('scale');
+  else if (k === 'q') { tHelper.visible = !tHelper.visible; tControls.enabled = tHelper.visible; }
+  else if (e.key === 'Delete' || e.key === 'Backspace') { if (selectedId != null) removeLayer(selectedId); }
+  else if (k === 'f') frameAll();
+});
+
+/* ------------------------------------------------------------------ *
+ * 描画
+ * ------------------------------------------------------------------ */
+function renderFrame() {
+  renderer.autoClear = false;
+  renderer.clear(true, true, true);
+  if (bgUseEnv && envBgScene.background) { renderer.render(envBgScene, camera); renderer.clearDepth(); }
+  if (bgScene.children.length) { renderer.render(bgScene, overlayCam); renderer.clearDepth(); }
+  renderer.render(scene, camera);
+  if (fgScene.children.length) { renderer.clearDepth(); renderer.render(fgScene, overlayCam); }
+}
+
+function resize() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(viewport);
+resize();
+
+function tick() {
+  requestAnimationFrame(tick);
+  controls.update();
+  layoutScreenLayers(viewport.clientWidth, viewport.clientHeight);
+  renderFrame();
+}
+tick();
+
+/* ------------------------------------------------------------------ *
+ * 書き出し
+ * ------------------------------------------------------------------ */
+$('preset').onchange = (e) => {
+  if (!e.target.value) return;
+  const [w, h] = e.target.value.split('x');
+  $('outW').value = w; $('outH').value = h;
+};
+$('btnPng').onclick = () => exportImage('png');
+$('btnJpg').onclick = () => exportImage('jpeg');
+
+async function exportImage(format) {
+  const W = Math.max(16, Math.min(8192, +$('outW').value | 0));
+  const H = Math.max(16, Math.min(8192, +$('outH').value | 0));
+  let ss = +$('ssaa').value;
+
+  // GPUの上限を超えないようにスーパーサンプリングを落とす
+  const gl = renderer.getContext();
+  const maxTex = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
+  while (ss > 1 && (W * ss > maxTex || H * ss > maxTex)) ss--;
+
+  setStatus(`書き出し中… ${W}×${H} (${ss}x)`);
+  // タブが非表示だと requestAnimationFrame が止まるので setTimeout で待つ
+  await new Promise((r) => setTimeout(r, 0));
+
+  // 補助表示を隠す
+  const hidden = [];
+  const hide = (o) => { if (o.visible) { o.visible = false; hidden.push(o); } };
+  hide(grid); hide(tHelper);
+  for (const l of layers) if (l.helper) hide(l.helper);
+
+  // 現在の状態を退避
+  const prevPR = renderer.getPixelRatio();
+  const prevSize = renderer.getSize(new THREE.Vector2());
+  const prevAspect = camera.aspect;
+
+  let blob = null;
+  try {
+    renderer.setPixelRatio(1);
+    renderer.setSize(W * ss, H * ss, false); // CSSサイズは変えない
+    camera.aspect = W / H;
+    camera.updateProjectionMatrix();
+    layoutScreenLayers(W, H);               // 画面固定レイヤーを出力比率で再配置
+    renderFrame();
+
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    const ctx = out.getContext('2d');
+    if (format === 'jpeg') {
+      // JPEGは透明を扱えないので背景色で埋める
+      ctx.fillStyle = $('bgMode').value === 'transparent' ? '#ffffff' : $('bgColor').value;
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(renderer.domElement, 0, 0, W * ss, H * ss, 0, 0, W, H);
+
+    blob = await new Promise((res) => out.toBlob(res, `image/${format}`, format === 'jpeg' ? +$('jpegQ').value : undefined));
+  } catch (err) {
+    console.error(err);
+    setStatus('書き出し失敗: ' + err.message);
+  } finally {
+    // 状態を戻す
+    renderer.setPixelRatio(prevPR);
+    renderer.setSize(prevSize.x, prevSize.y, false);
+    camera.aspect = prevAspect;
+    camera.updateProjectionMatrix();
+    for (const o of hidden) o.visible = true;
+    resize();
+  }
+
+  if (!blob) return;
+  const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `background_${ts}.${format === 'jpeg' ? 'jpg' : 'png'}`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  setStatus(`書き出し完了: ${W}×${H} ${format.toUpperCase()} (${(blob.size / 1048576).toFixed(2)} MB)`);
+}
+
+/* デバッグ用（コンソールから中身を触れるように） */
+window.__bgc = { THREE, scene, bgScene, fgScene, camera, renderer, layers, exportImage, frameAll };
+
+/* 初期状態：平行光源を1つ置いておく */
+addLight('directional');
+setStatus('準備完了 — 3Dモデルや画像を読み込んでください');
+</script>
+</body>
+</html>
